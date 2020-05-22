@@ -3,3 +3,5 @@ runs/
 generator_state*
 old_mnistcgan.py
 .gitignore
+rollouts/
+.vscode/

@@ -8,9 +8,10 @@ from torchvision.datasets import ImageFolder, MNIST
 from torchvision import transforms
 from torch import autograd
 from torch.autograd import Variable
-from torchvision.utils import make_grid
+from torchvision.utils import make_grid, save_image
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
+from scene_extractor import Extractor
 
 #%%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -22,17 +23,22 @@ transform = transforms.Compose([
         ,transforms.Normalize(mean=(0.5,), std=(0.5,))
 ])
 # %%
+WIDTH = 12
+NOISE_DIM = 10
+DATA_SIZE = 1000
+loader = Extractor("rollouts/test")
 batch_size = 32
-data_loader = torch.utils.data.DataLoader(
-    MNIST('data', train=True, download=True, transform=transform),
-    batch_size=batch_size, shuffle=True)
-
+X, Y = loader.extract(n=DATA_SIZE, stride=12, n_channels=3, 
+                    size=(WIDTH, WIDTH), r_fac=4.5, grayscale=False)
+X_test, Y_test = X[:10], Y[:10]
+data_set = torch.utils.data.TensorDataset(torch.tensor(X), torch.tensor(Y))
+data_loader = torch.utils.data.DataLoader(data_set, batch_size=batch_size, shuffle=False)
 
 # %%
 class Discriminator(nn.Module):
     def __init__(self):
         super().__init__()
-        
+        global WIDTH
         self.label_emb = nn.Embedding(10, 10)
         
         self._model = nn.Sequential(
@@ -53,7 +59,7 @@ class Discriminator(nn.Module):
         )
 
         self.model = nn.Sequential(
-            nn.Linear(794, 1024),
+            nn.Linear(WIDTH**2*5, 1024),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Dropout(0.3),
             nn.Linear(1024, 512),
@@ -66,11 +72,11 @@ class Discriminator(nn.Module):
             nn.Sigmoid()
         )
     
-    def forward(self, x, labels):
-        x = x.view(x.size(0), 784)
+    def forward(self, actions, scenes):
+        actions = actions.view(actions.size(0), WIDTH**2)
+        c = scenes.view(scenes.size(0), WIDTH**2*4)
         #x = self.encoder(x)
-        c = self.label_emb(labels)
-        x = torch.cat([x, c], 1)
+        x = torch.cat([actions, c], 1)
         out = self.model(x)
         return out.squeeze()
 
@@ -87,6 +93,7 @@ class View(nn.Module):
 
 #%%
 class Generator(nn.Module):
+    global WIDTH, NOISE_DIM
     def __init__(self):
         super().__init__()
         
@@ -106,22 +113,22 @@ class Generator(nn.Module):
         )
 
         self.model = nn.Sequential(
-            nn.Linear(110, 256),
+            nn.Linear(NOISE_DIM + WIDTH**2*4, 256),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Linear(256, 512),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Linear(512, 1024),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(1024, 784),
+            nn.Linear(1024, WIDTH**2),
             nn.Tanh()
         )
 
-    def forward(self, z, labels):
-        z = z.view(z.size(0), 100)
-        c = self.label_emb(labels)
+    def forward(self, z, scenes):
+        z = z.view(z.size(0), NOISE_DIM)
+        c = scenes.view(scenes.size(0), WIDTH**2*4)
         x = torch.cat([z, c], 1)
         out = self.model(x)
-        return out.view(x.size(0), 28, 28)
+        return out.view(x.size(0), WIDTH, WIDTH)
         #return out
 
 
@@ -141,12 +148,12 @@ writer = SummaryWriter()
 
 
 # %%
-def generator_train_step(batch_size, discriminator, generator, g_optimizer, criterion):
+def generator_train_step(batch_size, discriminator, generator, g_optimizer, criterion, scenes):
+    global NOISE_DIM
     g_optimizer.zero_grad()
-    z = Variable(torch.randn(batch_size, 100)).to(device)
-    fake_labels = Variable(torch.LongTensor(np.random.randint(0, 10, batch_size))).to(device)
-    fake_images = generator(z, fake_labels)
-    validity = discriminator(fake_images, fake_labels)
+    z = Variable(torch.randn(batch_size, NOISE_DIM)).to(device)
+    action = generator(z, scenes)
+    validity = discriminator(action, scenes)
     g_loss = criterion(validity, Variable(torch.ones(batch_size)).to(device))
     g_loss.backward()
     g_optimizer.step()
@@ -154,18 +161,18 @@ def generator_train_step(batch_size, discriminator, generator, g_optimizer, crit
 
 
 # %%
-def discriminator_train_step(batch_size, discriminator, generator, d_optimizer, criterion, real_images, labels):
+def discriminator_train_step(batch_size, discriminator, generator, d_optimizer, criterion, actions, scenes):
+    global NOISE_DIM
     d_optimizer.zero_grad()
 
     # train with real images
-    real_validity = discriminator(real_images, labels)
+    real_validity = discriminator(actions, scenes)
     real_loss = criterion(real_validity, Variable(torch.ones(batch_size)).to(device))
     
     # train with fake images
-    z = Variable(torch.randn(batch_size, 100)).to(device)
-    fake_labels = Variable(torch.LongTensor(np.random.randint(0, 10, batch_size))).to(device)
-    fake_images = generator(z, fake_labels)
-    fake_validity = discriminator(fake_images, fake_labels)
+    z = Variable(torch.randn(batch_size, NOISE_DIM)).to(device)
+    gen_actions = generator(z, scenes)
+    fake_validity = discriminator(gen_actions, scenes)
     fake_loss = criterion(fake_validity, Variable(torch.zeros(batch_size)).to(device))
     
     d_loss = real_loss + fake_loss
@@ -173,38 +180,48 @@ def discriminator_train_step(batch_size, discriminator, generator, d_optimizer, 
     d_optimizer.step()
     return d_loss.item()
 
+#%%
+def generate():
+    num_ex = 10
+    z = Variable(torch.randn(num_ex, NOISE_DIM)).to(device)
+    scenes = torch.tensor(X.sample(10), dtype=torch.float).to(device)
+    actions= torch.tensor(Y.sample(10), dtype=torch.float).to(device)
+
+    # %%
+    gen_actions = generator(z, scenes)[:,None,:]
+
+    # %%
+    combined = Variable(torch.cat((scenes, actions, gen_actions), dim=1).view(-1,1,12,12))
+    grid = make_grid(combined, nrow=6, normalize=True)
+    #plt.imshow(grid)
+    save_image(grid, "action_result.jpg")
 
 # %%
 def training():
-    num_epochs = 50
+    num_epochs = 500
     n_critic = 5
     display_step = 50
-    for epoch in range(num_epochs):
-        print('Starting epoch {}...'.format(epoch), end=' ')
-        for i, (images, labels) in tqdm(enumerate(data_loader)):
-            
+    for epoch in tqdm(range(num_epochs)):
+        #tqdm.write(f'Starting epoch {epoch}...')
+        for i, (scenes, actions) in enumerate(data_loader):
             step = epoch * len(data_loader) + i + 1
-            real_images = Variable(images).to(device)
-            labels = Variable(labels).to(device)
+            real_scenes = Variable(scenes.float()).to(device)
+            real_actions = Variable(actions.float()).to(device)
             generator.train()
             
-            d_loss = discriminator_train_step(len(real_images), discriminator,
+            d_loss = discriminator_train_step(len(real_scenes), discriminator,
                                             generator, d_optimizer, criterion,
-                                            real_images, labels)
+                                            real_actions, real_scenes)
             
 
-            g_loss = generator_train_step(batch_size, discriminator, generator, g_optimizer, criterion)
+            g_loss = generator_train_step(len(real_scenes), discriminator, generator,
+                                            g_optimizer, criterion, real_scenes)
             
             writer.add_scalars('scalars', {'g_loss': g_loss, 'd_loss': d_loss}, step)  
-            
-            if step % display_step == 0:
-                generator.eval()
-                z = Variable(torch.randn(9, 100)).to(device)
-                labels = Variable(torch.LongTensor(np.arange(9))).to(device)
-                sample_images = generator(z, labels).unsqueeze(1)
-                grid = make_grid(sample_images, nrow=3, normalize=True)
-                writer.add_image('sample_image', grid, step)
-        print('Done!')
+        
+        if epoch>0 and epoch%display_step ==0:
+            generate(X_test, Y_test)
+        #tqdm.write('Done!')
 
 
 # %%
@@ -212,42 +229,10 @@ def training():
 pretrained = False
 if not pretrained:
     training()
-    torch.save(generator.state_dict(), 'generator_state.pt')
+    torch.save(generator.state_dict(), 'cgan_state.pt')
 else:
     generator.load_state_dict(torch.load("generator_state.pt"))
 
 # %%
-z = Variable(torch.randn(100, 100)).to(device)
-labels = torch.LongTensor([i for i in range(10) for _ in range(10)]).to(device)
 
-
-# %%
-images = generator(z, labels).unsqueeze(1)
-
-
-# %%
-grid = make_grid(images, nrow=10, normalize=True)
-
-
-# %%
-fig, ax = plt.subplots(figsize=(10,10))
-ax.imshow(grid.permute(1, 2, 0).data, cmap='binary')
-ax.axis('off')
-
-
-# %%
-def generate_digit(generator, digit):
-    z = Variable(torch.randn(1, 100)).to(device)
-    label = torch.LongTensor([digit]).to(device)
-    img = generator(z, label).data.cpu()
-    img = 0.5 * img + 0.5
-    return transforms.ToPILImage()(img)
-
-
-# %%
-generate_digit(generator, 8)
-
-
-# %%
-
-
+generate(X_test, Y_test)

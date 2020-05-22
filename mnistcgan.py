@@ -223,7 +223,7 @@ labels = torch.LongTensor([i for i in range(10) for _ in range(10)]).to(device)
 
 # %%
 images = generator(z, labels).unsqueeze(1)
-
+print(images.size())
 
 # %%
 grid = make_grid(images, nrow=10, normalize=True)
