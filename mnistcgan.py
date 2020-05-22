@@ -35,19 +35,24 @@ class Discriminator(nn.Module):
         
         self.label_emb = nn.Embedding(10, 10)
         
-        self._model = nn.Sequential(
-            nn.Conv2d(1, 4, 4, 2, 2),  # in:32*32=1024  out:16*16*4=1024
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.Conv2d(4, 16, 4, 2, 0), # in:16*16*4=1024  out:8*8*16=1024
-            nn.LeakyReLU(0.1, inplace=True),
-            nn.BatchNorm2d(),
-            #nn.Dropout(0.3),
-            nn.Flatten(),
-            nn.Linear(1024, 1),
+        self.model = nn.Sequential(
+            nn.Linear(1034, 128),
+            nn.Linear(128,1),
             nn.Sigmoid()
         )
 
-        self.model = nn.Sequential(
+        self.encoder = nn.Sequential(
+            nn.Conv2d(1, 64, 4, 2, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(64, 128, 4, 2, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.BatchNorm2d(128),
+            nn.Flatten(start_dim=1),
+            nn.Linear(7*7*128, 1024),
+            nn.BatchNorm1d(1024),
+        )
+
+        self._model = nn.Sequential(
             nn.Linear(794, 1024),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Dropout(0.3),
@@ -62,7 +67,8 @@ class Discriminator(nn.Module):
         )
     
     def forward(self, x, labels):
-        x = x.view(x.size(0), 784)
+        #x = x.view(x.size(0), 784)
+        x = self.encoder(x)
         c = self.label_emb(labels)
         x = torch.cat([x, c], 1)
         out = self.model(x)
@@ -70,24 +76,36 @@ class Discriminator(nn.Module):
 
 
 # %%
+class View(nn.Module):
+    #Changing the Shape
+    def __init__(self, shape):
+        super(View, self).__init__()
+        self.shape = shape
+
+    def forward(self, x):
+        return x.view(*self.shape)
+
+#%%
 class Generator(nn.Module):
     def __init__(self):
         super().__init__()
         
         self.label_emb = nn.Embedding(10, 10)
         
-        self._model = nn.Sequential(
-            nn.Linear(110, 256),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(256, 512),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(512, 1024),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(1024, 784),
-            nn.Tanh()
+        self.model = nn.Sequential(
+            nn.Linear(110, 1024),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm1d(1024),
+            nn.Linear(1024, 7*7*128),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm1d(7*7*128),
+            View((-1, 128, 7, 7)),
+            nn.ConvTranspose2d(128, 64, 4, 2, 1),
+            nn.BatchNorm2d(64),
+            nn.ConvTranspose2d(64, 1, 4, 2, 1),
         )
 
-        self.model = nn.Sequential(
+        self._model = nn.Sequential(
             nn.Linear(110, 256),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Linear(256, 512),
@@ -103,7 +121,8 @@ class Generator(nn.Module):
         c = self.label_emb(labels)
         x = torch.cat([z, c], 1)
         out = self.model(x)
-        return out.view(x.size(0), 28, 28)
+        #return out.view(x.size(0), 28, 28)
+        return out
 
 
 # %%
@@ -161,7 +180,7 @@ n_critic = 5
 display_step = 50
 for epoch in range(num_epochs):
     print('Starting epoch {}...'.format(epoch), end=' ')
-    for i, (images, labels) in enumerate(data_loader):
+    for i, (images, labels) in tqdm(enumerate(data_loader)):
         
         step = epoch * len(data_loader) + i + 1
         real_images = Variable(images).to(device)
