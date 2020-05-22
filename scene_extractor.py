@@ -31,7 +31,7 @@ class Extractor:
         img = cv2.copyMakeBorder(img, r,r,r,r, cv2.BORDER_CONSTANT, value=[255,255,255])
         img = img[-r-(y+r):-r-(y-r), r+(x-r):r+(x+r)]
         if not grayscale:
-          img = cv2.resize(img, size, interpolation=cv2.INTER_AREA)
+          img = cv2.resize(img, size, interpolation=cv2.INTER_AREA)/255
         frame = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         if visual_delay:
           cv2.imshow("Test", img)
@@ -41,13 +41,13 @@ class Extractor:
         if j == 0:
           red = cv2.inRange(frame, np.array([0,245,190]), np.array([15,255,210]))
           if grayscale:
-            red = cv2.resize(red, size, interpolation=cv2.INTER_AREA)
+            red = cv2.resize(red, size, interpolation=cv2.INTER_AREA)/255
           sub_y.append(red)
       
         # Green ball filter
         green =  cv2.inRange(frame, np.array([50,245,190]), np.array([70,255,210]))
         if grayscale:
-          green = cv2.resize(green, size, interpolation=cv2.INTER_AREA)
+          green = cv2.resize(green, size, interpolation=cv2.INTER_AREA)/255
         sub_x.append(green)
 
         # Static objects filter
@@ -55,7 +55,7 @@ class Extractor:
           #floor =  cv2.inRange(frame, np.array([110,245,190]), np.array([130,255,210]))
           static =  cv2.inRange(frame, np.array([0,0,0]), np.array([255,255,60]))
           if grayscale:
-            static = cv2.resize(static, size, interpolation=cv2.INTER_AREA)
+            static = cv2.resize(static, size, interpolation=cv2.INTER_AREA)/255
 
       # Appending Static in the end
       sub_x.append(static)
@@ -76,8 +76,8 @@ class Extractor:
     return X,Y
   
   def save(self, X, Y, path):
-    X = np.array(X)
-    Y = np.array(Y)
+    X = np.array(X)*255
+    Y = np.array(Y)*255
     #print(X, Y)
     for i in range(len(X)):
       pathlib.Path(f"{path}/{i}/train").mkdir(parents=True, exist_ok=True)

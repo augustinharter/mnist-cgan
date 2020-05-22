@@ -12,6 +12,8 @@ from torchvision.utils import make_grid, save_image
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 from scene_extractor import Extractor
+import random
+import cv2
 
 #%%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -29,8 +31,7 @@ DATA_SIZE = 1000
 loader = Extractor("rollouts/test")
 batch_size = 32
 X, Y = loader.extract(n=DATA_SIZE, stride=12, n_channels=3, 
-                    size=(WIDTH, WIDTH), r_fac=4.5, grayscale=False)
-X_test, Y_test = X[:10], Y[:10]
+                    size=(WIDTH, WIDTH), r_fac=4.5, grayscale=True)
 data_set = torch.utils.data.TensorDataset(torch.tensor(X), torch.tensor(Y))
 data_loader = torch.utils.data.DataLoader(data_set, batch_size=batch_size, shuffle=False)
 
@@ -152,8 +153,9 @@ def generator_train_step(batch_size, discriminator, generator, g_optimizer, crit
     global NOISE_DIM
     g_optimizer.zero_grad()
     z = Variable(torch.randn(batch_size, NOISE_DIM)).to(device)
-    action = generator(z, scenes)
-    validity = discriminator(action, scenes)
+    actions = generator(z, scenes)
+    validity = discriminator(actions, scenes)
+    #tqdm.write(str(actions[0]))
     g_loss = criterion(validity, Variable(torch.ones(batch_size)).to(device))
     g_loss.backward()
     g_optimizer.step()
@@ -184,20 +186,22 @@ def discriminator_train_step(batch_size, discriminator, generator, d_optimizer, 
 def generate():
     num_ex = 10
     z = Variable(torch.randn(num_ex, NOISE_DIM)).to(device)
-    scenes = torch.tensor(X.sample(10), dtype=torch.float).to(device)
-    actions= torch.tensor(Y.sample(10), dtype=torch.float).to(device)
+    scenes = torch.tensor(random.sample(X,10), dtype=torch.float).to(device)
+    actions= torch.tensor(random.sample(Y,10), dtype=torch.float).to(device)
 
     # %%
-    gen_actions = generator(z, scenes)[:,None,:]
+    gen_actions = generator(z, scenes)[:,None,:].abs()
 
     # %%
     combined = Variable(torch.cat((scenes, actions, gen_actions), dim=1).view(-1,1,12,12))
+    #print(combined)
     grid = make_grid(combined, nrow=6, normalize=True)
-    #plt.imshow(grid)
+    plt.imshow(grid[0])
+    plt.show(block=False)
     save_image(grid, "action_result.jpg")
 
 # %%
-def training():
+def training(safe=True):
     num_epochs = 500
     n_critic = 5
     display_step = 50
@@ -208,6 +212,8 @@ def training():
             real_scenes = Variable(scenes.float()).to(device)
             real_actions = Variable(actions.float()).to(device)
             generator.train()
+
+            #print(real_actions[0,0])
             
             d_loss = discriminator_train_step(len(real_scenes), discriminator,
                                             generator, d_optimizer, criterion,
@@ -219,20 +225,25 @@ def training():
             
             writer.add_scalars('scalars', {'g_loss': g_loss, 'd_loss': d_loss}, step)  
         
+        tqdm.write(f"{d_loss} {g_loss}")
+        
         if epoch>0 and epoch%display_step ==0:
-            generate(X_test, Y_test)
+            if safe:
+                torch.save(discriminator.state_dict(), 'disc_state.pt')
+                torch.save(generator.state_dict(), 'gen_state.pt')
+            generate()
         #tqdm.write('Done!')
 
 
 # %%
 # TRAINING
-pretrained = False
-if not pretrained:
-    training()
-    torch.save(generator.state_dict(), 'cgan_state.pt')
+only_generate = False
+if only_generate:
+    generator.load_state_dict(torch.load("gen_state.pt"))
+    discriminator.load_state_dict(torch.load("disc_state.pt"))
+    generate()
 else:
-    generator.load_state_dict(torch.load("generator_state.pt"))
-
+    generator.load_state_dict(torch.load("gen_state.pt"))
+    discriminator.load_state_dict(torch.load("disc_state.pt"))
+    training()
 # %%
-
-generate(X_test, Y_test)
