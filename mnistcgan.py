@@ -23,8 +23,9 @@ transform = transforms.Compose([
 ])
 # %%
 batch_size = 32
-data_loader = torch.utils.data.DataLoader(MNIST('data', train=True, download=True, transform=transform),
-                                          batch_size=batch_size, shuffle=True)
+data_loader = torch.utils.data.DataLoader(
+    MNIST('data', train=True, download=True, transform=transform),
+    batch_size=batch_size, shuffle=True)
 
 
 # %%
@@ -34,6 +35,18 @@ class Discriminator(nn.Module):
         
         self.label_emb = nn.Embedding(10, 10)
         
+        self._model = nn.Sequential(
+            nn.Conv2d(1, 4, 4, 2, 2),  # in:32*32=1024  out:16*16*4=1024
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(4, 16, 4, 2, 0), # in:16*16*4=1024  out:8*8*16=1024
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.BatchNorm2d(),
+            #nn.Dropout(0.3),
+            nn.Flatten(),
+            nn.Linear(1024, 1),
+            nn.Sigmoid()
+        )
+
         self.model = nn.Sequential(
             nn.Linear(794, 1024),
             nn.LeakyReLU(0.2, inplace=True),
@@ -63,6 +76,17 @@ class Generator(nn.Module):
         
         self.label_emb = nn.Embedding(10, 10)
         
+        self._model = nn.Sequential(
+            nn.Linear(110, 256),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Linear(256, 512),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Linear(512, 1024),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Linear(1024, 784),
+            nn.Tanh()
+        )
+
         self.model = nn.Sequential(
             nn.Linear(110, 256),
             nn.LeakyReLU(0.2, inplace=True),
@@ -73,7 +97,7 @@ class Generator(nn.Module):
             nn.Linear(1024, 784),
             nn.Tanh()
         )
-    
+
     def forward(self, z, labels):
         z = z.view(z.size(0), 100)
         c = self.label_emb(labels)
