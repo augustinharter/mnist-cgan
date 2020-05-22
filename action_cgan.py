@@ -8,7 +8,7 @@ from torchvision.datasets import ImageFolder, MNIST
 from torchvision import transforms
 from torch import autograd
 from torch.autograd import Variable
-from torchvision.utils import make_grid, save_image
+from torchvision.utils import make_grid
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 
@@ -227,7 +227,7 @@ images = generator(z, labels).unsqueeze(1)
 
 # %%
 grid = make_grid(images, nrow=10, normalize=True)
-save_image(grid, "grid_result.jpg")
+
 
 # %%
 fig, ax = plt.subplots(figsize=(10,10))
