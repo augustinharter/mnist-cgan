@@ -37,8 +37,8 @@ class Extractor:
           cv2.imshow("Test", img)
           cv2.waitKey(delay=visual_delay)
       
-        # Red ball filter, somehow there are some red noise pixels, that need to be eroded
-        if j == 0:
+        # Red ball filter
+        if j <= 0:
           red = cv2.inRange(frame, np.array([0,245,190]), np.array([15,255,210]))
           if grayscale:
             red = cv2.resize(red, size, interpolation=cv2.INTER_AREA)/255

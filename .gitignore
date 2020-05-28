@@ -5,3 +5,4 @@ old_mnistcgan.py
 .gitignore
 rollouts/
 .vscode/
+*_state.pt

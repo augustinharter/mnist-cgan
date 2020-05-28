@@ -159,7 +159,7 @@ handler = space_init.add_default_collision_handler()
 handler.pre_solve = pre_col
 
 # MAIN LOOP
-count = 0
+count = 3618
 while True:
   contact = 0
   space = space_init.copy()

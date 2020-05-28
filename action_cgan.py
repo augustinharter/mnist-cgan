@@ -27,7 +27,9 @@ transform = transforms.Compose([
 # %%
 WIDTH = 12
 NOISE_DIM = 10
-DATA_SIZE = 1000
+DATA_SIZE = 5000
+S_CHANNELS = 4
+A_CHANNELS = 2
 loader = Extractor("rollouts/test")
 batch_size = 32
 X, Y = loader.extract(n=DATA_SIZE, stride=12, n_channels=3, 
@@ -60,7 +62,7 @@ class Discriminator(nn.Module):
         )
 
         self.model = nn.Sequential(
-            nn.Linear(WIDTH**2*5, 1024),
+            nn.Linear(WIDTH**2*(S_CHANNELS+A_CHANNELS), 1024),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Dropout(0.3),
             nn.Linear(1024, 512),
@@ -74,8 +76,8 @@ class Discriminator(nn.Module):
         )
     
     def forward(self, actions, scenes):
-        actions = actions.view(actions.size(0), WIDTH**2)
-        c = scenes.view(scenes.size(0), WIDTH**2*4)
+        actions = actions.view(actions.size(0), WIDTH**2*A_CHANNELS)
+        c = scenes.view(scenes.size(0), WIDTH**2*S_CHANNELS)
         #x = self.encoder(x)
         x = torch.cat([actions, c], 1)
         out = self.model(x)
@@ -114,22 +116,22 @@ class Generator(nn.Module):
         )
 
         self.model = nn.Sequential(
-            nn.Linear(NOISE_DIM + WIDTH**2*4, 256),
+            nn.Linear(NOISE_DIM + WIDTH**2*S_CHANNELS, 256),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Linear(256, 512),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Linear(512, 1024),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(1024, WIDTH**2),
+            nn.Linear(1024, WIDTH**2*A_CHANNELS),
             nn.Tanh()
         )
 
     def forward(self, z, scenes):
         z = z.view(z.size(0), NOISE_DIM)
-        c = scenes.view(scenes.size(0), WIDTH**2*4)
+        c = scenes.view(scenes.size(0), WIDTH**2*S_CHANNELS)
         x = torch.cat([z, c], 1)
         out = self.model(x)
-        return out.view(x.size(0), WIDTH, WIDTH)
+        return out.view(x.size(0), A_CHANNELS, WIDTH, WIDTH)
         #return out
 
 
@@ -184,27 +186,34 @@ def discriminator_train_step(batch_size, discriminator, generator, d_optimizer, 
 
 #%%
 def generate():
-    num_ex = 10
-    z = Variable(torch.randn(num_ex, NOISE_DIM)).to(device)
-    scenes = torch.tensor(random.sample(X,10), dtype=torch.float).to(device)
-    actions= torch.tensor(random.sample(Y,10), dtype=torch.float).to(device)
+    num_cells = 4*8
+    z = Variable(torch.randn(num_cells, NOISE_DIM)).to(device)
+    selection = np.random.randint(len(X), size=(num_cells,))
+    scenes = torch.tensor(np.array(X)[selection], dtype=torch.float).to(device)
+    actions= np.array(Y)[selection]
 
-    # %%
-    gen_actions = generator(z, scenes)[:,None,:].abs()
+    gen_actions = generator(z, scenes).abs()
 
-    # %%
-    combined = Variable(torch.cat((scenes, actions, gen_actions), dim=1).view(-1,1,12,12))
+    s = scenes.detach().numpy()
+    g = gen_actions.detach().numpy()
+    green = np.max(np.stack((0.5*s[:,0],s[:,1],0.5*s[:,2]), axis=-1), axis=-1).reshape(num_cells,1,12,12)
+    blue = s[:,3].reshape(num_cells,1,12,12)
+    red = np.max(np.stack((0.5*actions[:,0],actions[:,1]), axis=-1), axis=-1).reshape(num_cells,1,12,12)
+    orig = np.concatenate((red, green, blue), axis=1)
+    red = np.max(np.stack((0.5*g[:,0],g[:,1]), axis=-1), axis=-1).reshape(num_cells,1,12,12)
+    gen = np.concatenate((red, green, blue), axis=1)
     #print(combined)
-    grid = make_grid(combined, nrow=6, normalize=True)
+    combined = np.concatenate((orig, gen), axis=1).reshape(2*num_cells,3,12,12)
+    grid = make_grid(torch.tensor(combined), nrow=8, normalize=True)
     plt.imshow(grid[0])
     plt.show(block=False)
-    save_image(grid, "action_result.jpg")
+    save_image(grid, "action_result.png")
 
 # %%
 def training(safe=True):
-    num_epochs = 500
+    num_epochs = 100
     n_critic = 5
-    display_step = 50
+    display_step = 10
     for epoch in tqdm(range(num_epochs)):
         #tqdm.write(f'Starting epoch {epoch}...')
         for i, (scenes, actions) in enumerate(data_loader):
@@ -243,7 +252,7 @@ if only_generate:
     discriminator.load_state_dict(torch.load("disc_state.pt"))
     generate()
 else:
-    generator.load_state_dict(torch.load("gen_state.pt"))
-    discriminator.load_state_dict(torch.load("disc_state.pt"))
+    #generator.load_state_dict(torch.load("gen_state.pt"))
+    #discriminator.load_state_dict(torch.load("disc_state.pt"))
     training()
 # %%
