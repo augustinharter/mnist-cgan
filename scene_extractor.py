@@ -18,11 +18,13 @@ class Extractor:
               r_fac=3, size=(8,8), grayscale= False):
     X = []
     Y = []
+    info = []
     center = self.num_frames//2
     for i in range(n):
       sub_x = []
       sub_y = []
-      orig_radius, pos = json.load(open(f"{self.path}/{self.pos+i}/positions.txt"))
+      pos, scene_info = json.load(open(f"{self.path}/{self.pos+i}/positions.txt"))
+      init_pos, contact_pos, orig_radius, action_radius = scene_info
       r = int(r_fac*orig_radius)
       # Filter for desired frames:
       x, y = int(pos[center][0][0]), int(pos[center][0][1])
@@ -71,9 +73,12 @@ class Extractor:
 
       X.append(sub_x)
       Y.append(sub_y)
-
+      info.append({'init_pos': init_pos, 'r': r, 'con_pos': contact_pos,
+                    'orig_radius': orig_radius,
+                    'action_radius':action_radius})
+    
     self.pos += n
-    return X,Y
+    return X,Y, info
   
   def save(self, X, Y, path):
     X = np.array(X)*255
@@ -89,7 +94,7 @@ class Extractor:
         #cv2.waitKey(delay=500)
 
 if __name__ == "__main__":
-  loader = Extractor("rollouts/test")
-  X, Y = loader.extract(n=1000, stride=12, n_channels=3, visual_delay=0, 
+  loader = Extractor("rollouts/solutions")
+  X, Y, _ = loader.extract(n=10, stride=12, n_channels=3, visual_delay=0, 
                         size=(12,12), r_fac=4.5, grayscale=True)
-  loader.save(X, Y, "rollouts/test")
+  loader.save(X, Y, "rollouts/solutions")

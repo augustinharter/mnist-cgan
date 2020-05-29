@@ -11,7 +11,7 @@ import pathlib
 import sys
 import json
 
-FOLDER_NAME = "test"
+FOLDER_NAME = "solutions"
 NUM_ROLLOUTS = 100 if not len(sys.argv) == 2 else int(sys.argv[1])
 TIME_PER_STEP = 100  #No real time value correspondance, only relative meaning
 NUM_INTERACTION_FRAMES = 40
@@ -46,7 +46,7 @@ def setup_space():
   wall_body.position = (0,0)
   wall_width = 1
   wd = pymunk.Segment(wall_body, (-1,      0), (size,      0), wall_width)
-  wu = pymunk.Segment(wall_body, (-1, 1+size), (size, 1+size), wall_width)
+  wu = pymunk.Segment(wall_body, (-1, 1+size), (0, 1+size), wall_width)
   wl = pymunk.Segment(wall_body, (-1,      0), (-1,     size), wall_width)
   wr = pymunk.Segment(wall_body, (size,    0), (size,   size), wall_width)
   space.add(wall_body, wl, wr, wu, wd)
@@ -74,17 +74,21 @@ def setup_space():
 
 # Collision
 def pre_col(arbiter, space, data):
-  global tags, contact
+  global tags, contact, goal
   sh = space.shapes
   tags = {1:sh[6], 2:sh[4], 6:sh[-1], 4:sh[5]}
   objs = {sh[6]:1, sh[4]:2, sh[-1]:6, sh[5]:4, sh[1]:0, sh[2]:0, sh[3]:0, sh[0]:0}
   a, b = arbiter.shapes
   if (a==tags[1] and b == tags[6]) or (b==tags[1] and a == tags[6]):
     contact += 1
+  if a==tags[1] or b==tags[1]:
+    # Check goal condition
+    if b == tags[2] or a == tags[2]:
+      goal +=1
   return True
 
 def sep_col(arbiter, space, data):
-  global tags, contact
+  global tags, goal
   sh = space.shapes
   tags = {1:sh[6], 2:sh[4], 6:sh[-1], 4:sh[5]}
   objs = {sh[6]:1, sh[4]:2, sh[-1]:6, sh[5]:4, sh[1]:0, sh[2]:0, sh[3]:0, sh[0]:0}
@@ -92,8 +96,8 @@ def sep_col(arbiter, space, data):
   if a==tags[1] or b==tags[1]:
     # Check goal condition
     if b == tags[2] or a == tags[2]:
-      if contact <=100:
-        contact = 0
+      goal = 0
+  return True
 
 
 # Simulation
@@ -101,14 +105,14 @@ def find_solving_action(space, pos, radius):
   global size
   while True:
     action_radius = 16 + (random.random()-0.5) * 8
-    action_pos = ((random.random()-0.5)*2*(radius+action_radius-2)+pos[0], (3*size//5) + random.random()*2*size//5)
+    action_pos = ((random.random()-1)*(radius+action_radius-2)+pos[0], (3*size//5) + random.random()*2*size//5)
     if not space.point_query_nearest(action_pos, action_radius+5, []):
       add_ball(space, action_radius, action_pos)
       break
   return action_pos, action_radius
 
-def simulate(space, path, radius):
-  global tags, contact, count
+def simulate(space, path, radius, action_pos, action_radius):
+  global tags, contact, count, goal
   sh = space.shapes
   tags = {1:sh[6], 2:sh[4], 6:sh[-1], 4:sh[5]}
   screens = []
@@ -116,6 +120,7 @@ def simulate(space, path, radius):
   interaction_step = 0
 
   frames = 0
+  got_frames=False
   half = NUM_INTERACTION_FRAMES//2
   for step in range(350):
     for event in pygame.event.get():
@@ -147,32 +152,39 @@ def simulate(space, path, radius):
 
       cv2.imwrite(path+f"/{frames}.jpg", cv2.cvtColor(screens[step], cv2.COLOR_RGB2BGR))
       frames +=1
-      if frames>=NUM_INTERACTION_FRAMES:
+      if frames==NUM_INTERACTION_FRAMES:
         fp = open(path+f"/positions.txt", mode="w")
-        json.dump((radius, positions[interaction_step-half:interaction_step+half]), fp)
-        return True
+        json.dump((positions[interaction_step-half:interaction_step+half], 
+          (positions[0], positions[interaction_step], radius, action_radius)), fp)
+        got_frames = True
+    if goal >=100 and got_frames:
+      return True
+
   return False
     #clock.tick(50)
 
-space_init = setup_space()
-handler = space_init.add_default_collision_handler()
-handler.pre_solve = pre_col
+if __name__ == "__main__":
+  space_init = setup_space()
+  handler = space_init.add_default_collision_handler()
+  handler.pre_solve = pre_col
 
-# MAIN LOOP
-count = 3618
-while True:
-  contact = 0
-  space = space_init.copy()
-  pos = (size/3, size*0.8 + (random.random()-0.5)*80)
-  radius = 16 + (random.random()-0.5) * 8
-  ball = add_ball(space, radius, pos, color = (0, 200, 0, 255))
-  action_pos, action_radius = find_solving_action(space, pos, radius)
+  # MAIN LOOP
+  count = 0
+  while True:
+    contact = 0
+    goal = 0
+    
+    space = space_init.copy()
+    pos = (size/3, size*0.8 + (random.random()-0.5)*80)
+    radius = 16 + (random.random()-0.5) * 8
+    ball = add_ball(space, radius, pos, color = (0, 200, 0, 255))
+    action_pos, action_radius = find_solving_action(space, pos, radius)
 
-  # SIMULATION
-  print("simulating...", count)
-  path = f"rollouts/{FOLDER_NAME}/{count}"
-  pathlib.Path(path).mkdir(parents=True, exist_ok=True)
-  if simulate(space, path, radius):
-    count += 1
-  if count>=NUM_ROLLOUTS:
-    break
+    # SIMULATION
+    print("simulating...", count)
+    path = f"rollouts/{FOLDER_NAME}/{count}"
+    pathlib.Path(path).mkdir(parents=True, exist_ok=True)
+    if simulate(space, path, radius, action_pos, action_radius):
+        count += 1
+        if count>=NUM_ROLLOUTS:
+            break

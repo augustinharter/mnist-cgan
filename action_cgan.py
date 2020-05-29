@@ -16,33 +16,32 @@ import random
 import cv2
 
 #%%
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("device:", device)
+if __name__ == "__main__":
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("device:", device)
 # %%
-transform = transforms.Compose([
-        #transforms.Grayscale(),
-        transforms.ToTensor()
-        ,transforms.Normalize(mean=(0.5,), std=(0.5,))
-])
-# %%
-WIDTH = 12
-NOISE_DIM = 10
-DATA_SIZE = 5000
-S_CHANNELS = 4
-A_CHANNELS = 2
-loader = Extractor("rollouts/test")
-batch_size = 32
-X, Y = loader.extract(n=DATA_SIZE, stride=12, n_channels=3, 
-                    size=(WIDTH, WIDTH), r_fac=4.5, grayscale=True)
-data_set = torch.utils.data.TensorDataset(torch.tensor(X), torch.tensor(Y))
-data_loader = torch.utils.data.DataLoader(data_set, batch_size=batch_size, shuffle=False)
+if __name__ == "__main__":
+    WIDTH = 12
+    NOISE_DIM = 10
+    only_generate = True
+    DATA_SIZE = 100 if only_generate else 5000
+    S_CHANNELS = 4
+    A_CHANNELS = 2
+    loader = Extractor("rollouts/test")
+    batch_size = 32
+    X, Y, _ = loader.extract(n=DATA_SIZE, stride=12, n_channels=3, 
+                        size=(WIDTH, WIDTH), r_fac=4.5, grayscale=True)
+    data_set = torch.utils.data.TensorDataset(torch.tensor(X), torch.tensor(Y))
+    data_loader = torch.utils.data.DataLoader(data_set, batch_size=batch_size, shuffle=False)
 
 # %%
 class Discriminator(nn.Module):
-    def __init__(self):
+    def __init__(self, width, s_chan, a_chan):
         super().__init__()
-        global WIDTH
         self.label_emb = nn.Embedding(10, 10)
+        self.width = width
+        self.s_chan = s_chan
+        self.a_chan = a_chan
         
         self._model = nn.Sequential(
             nn.Linear(1034, 128),
@@ -62,7 +61,7 @@ class Discriminator(nn.Module):
         )
 
         self.model = nn.Sequential(
-            nn.Linear(WIDTH**2*(S_CHANNELS+A_CHANNELS), 1024),
+            nn.Linear(self.width**2*(self.s_chan+self.a_chan), 1024),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Dropout(0.3),
             nn.Linear(1024, 512),
@@ -76,8 +75,8 @@ class Discriminator(nn.Module):
         )
     
     def forward(self, actions, scenes):
-        actions = actions.view(actions.size(0), WIDTH**2*A_CHANNELS)
-        c = scenes.view(scenes.size(0), WIDTH**2*S_CHANNELS)
+        actions = actions.view(actions.size(0), self.width**2*self.a_chan)
+        c = scenes.view(scenes.size(0), self.width**2*self.s_chan)
         #x = self.encoder(x)
         x = torch.cat([actions, c], 1)
         out = self.model(x)
@@ -96,9 +95,12 @@ class View(nn.Module):
 
 #%%
 class Generator(nn.Module):
-    global WIDTH, NOISE_DIM
-    def __init__(self):
+    def __init__(self, width, noise_dim, s_chan, a_chan):
         super().__init__()
+        self.width = width
+        self.noise_dim = noise_dim
+        self.s_chan = s_chan
+        self.a_chan = a_chan
         
         self.label_emb = nn.Embedding(10, 10)
         
@@ -116,39 +118,35 @@ class Generator(nn.Module):
         )
 
         self.model = nn.Sequential(
-            nn.Linear(NOISE_DIM + WIDTH**2*S_CHANNELS, 256),
+            nn.Linear(self.noise_dim + self.width**2*self.s_chan, 256),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Linear(256, 512),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Linear(512, 1024),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Linear(1024, WIDTH**2*A_CHANNELS),
+            nn.Linear(1024, self.width**2*self.a_chan),
             nn.Tanh()
         )
 
     def forward(self, z, scenes):
-        z = z.view(z.size(0), NOISE_DIM)
-        c = scenes.view(scenes.size(0), WIDTH**2*S_CHANNELS)
+        z = z.view(z.size(0), self.noise_dim)
+        c = scenes.view(scenes.size(0), self.width**2*self.s_chan)
         x = torch.cat([z, c], 1)
         out = self.model(x)
-        return out.view(x.size(0), A_CHANNELS, WIDTH, WIDTH)
+        return out.view(x.size(0), self.a_chan, self.width, self.width)
         #return out
 
 
 # %%
-generator = Generator().to(device)
-discriminator = Discriminator().to(device)
+if __name__ == "__main__":
+    generator = Generator(WIDTH, NOISE_DIM, S_CHANNELS, A_CHANNELS).to(device)
+    discriminator = Discriminator(WIDTH, S_CHANNELS, A_CHANNELS).to(device)
 
+    criterion = nn.BCELoss()
+    d_optimizer = torch.optim.Adam(discriminator.parameters(), lr=1e-4)
+    g_optimizer = torch.optim.Adam(generator.parameters(), lr=1e-4)
 
-# %%
-criterion = nn.BCELoss()
-d_optimizer = torch.optim.Adam(discriminator.parameters(), lr=1e-4)
-g_optimizer = torch.optim.Adam(generator.parameters(), lr=1e-4)
-
-
-# %%
-writer = SummaryWriter()
-
+    writer = SummaryWriter()
 
 # %%
 def generator_train_step(batch_size, discriminator, generator, g_optimizer, criterion, scenes):
@@ -186,16 +184,25 @@ def discriminator_train_step(batch_size, discriminator, generator, d_optimizer, 
 
 #%%
 def generate():
-    num_cells = 4*8
-    z = Variable(torch.randn(num_cells, NOISE_DIM)).to(device)
-    selection = np.random.randint(len(X), size=(num_cells,))
+    num_rows = 8
+    num_cols = 4
+    num_cells = num_cols*num_rows
+    z = Variable(torch.randn(num_rows, NOISE_DIM).repeat_interleave(num_cols, dim=0)).to(device)
+    selection = np.random.randint(len(X), size=(num_cols,))
     scenes = torch.tensor(np.array(X)[selection], dtype=torch.float).to(device)
-    actions= np.array(Y)[selection]
+    scenes = scenes.repeat(num_rows,1,1,1)
+    actions= torch.tensor(np.array(Y)[selection])
+    actions= actions.repeat(num_rows,1,1,1)
 
     gen_actions = generator(z, scenes).abs()
 
     s = scenes.detach().numpy()
     g = gen_actions.detach().numpy()
+    # Thresholding
+    check = g>0.3
+    g = g*check
+    
+    # Creating and combining Color Layers
     green = np.max(np.stack((0.5*s[:,0],s[:,1],0.5*s[:,2]), axis=-1), axis=-1).reshape(num_cells,1,12,12)
     blue = s[:,3].reshape(num_cells,1,12,12)
     red = np.max(np.stack((0.5*actions[:,0],actions[:,1]), axis=-1), axis=-1).reshape(num_cells,1,12,12)
@@ -208,6 +215,9 @@ def generate():
     plt.imshow(grid[0])
     plt.show(block=False)
     save_image(grid, "action_result.png")
+    #img = cv2.imread("action_result.png")
+    #img = cv2.resize(img, tuple(np.array(img.shape[:2])*4))
+    #cv2.imwrite("action_result_big.png", img)
 
 # %%
 def training(safe=True):
@@ -246,13 +256,13 @@ def training(safe=True):
 
 # %%
 # TRAINING
-only_generate = False
-if only_generate:
-    generator.load_state_dict(torch.load("gen_state.pt"))
-    discriminator.load_state_dict(torch.load("disc_state.pt"))
-    generate()
-else:
-    #generator.load_state_dict(torch.load("gen_state.pt"))
-    #discriminator.load_state_dict(torch.load("disc_state.pt"))
-    training()
+if __name__ == "__main__":
+    if only_generate:
+        generator.load_state_dict(torch.load("gen_state.pt"))
+        discriminator.load_state_dict(torch.load("disc_state.pt"))
+        generate()
+    else:
+        generator.load_state_dict(torch.load("gen_state.pt"))
+        discriminator.load_state_dict(torch.load("disc_state.pt"))
+        training()
 # %%
